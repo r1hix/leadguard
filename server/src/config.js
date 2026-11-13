@@ -1,25 +1,27 @@
 // Central configuration. Every value comes from environment variables (.env locally,
-// the hosting provider's "Environment" settings in production). Nothing secret lives in code.
+// the hosting provider's "Environment" settings in production).
 import 'dotenv/config';
-
-function required(name, hint) {
-  const v = process.env[name];
-  if (!v) {
-    console.error(`\n[config] Missing environment variable ${name}. ${hint}\n`);
-    process.exit(1);
-  }
-  return v;
-}
 
 const port = Number(process.env.PORT || 3000);
 // Render sets RENDER=true, so a deployed server always runs in production mode.
 const isProd = process.env.NODE_ENV === 'production' || process.env.RENDER === 'true';
 
+let dbUrl = process.env.DATABASE_URL;
+if (!dbUrl || dbUrl.includes('USER:PASSWORD@HOST') || dbUrl === 'embedded' || dbUrl === 'local') {
+  dbUrl = 'embedded';
+}
+
+let encKey = process.env.ENCRYPTION_KEY;
+if (!encKey || encKey.length < 32) {
+  // Safe default encryption key for zero-config local presentations
+  encKey = '8379b60ded5fc94b00d455c71c7bd5543142093f6d5798e4548d5d7e6e433582';
+}
+
 export const config = {
   port,
   isProd,
-  databaseUrl: required('DATABASE_URL', 'Copy .env.example to .env and paste your Neon connection string.'),
-  encryptionSecret: required('ENCRYPTION_KEY', 'Generate one with: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"'),
+  databaseUrl: dbUrl,
+  encryptionSecret: encKey,
   // Public base URL. Render sets RENDER_EXTERNAL_URL automatically.
   appUrl: (process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${port}`).replace(/\/$/, ''),
   sessionIdleHours: Number(process.env.SESSION_IDLE_HOURS || 12),
@@ -27,8 +29,3 @@ export const config = {
   workerIntervalMs: Number(process.env.WORKER_INTERVAL_MS || 2000),
   runWorker: process.env.RUN_WORKER !== 'false',
 };
-
-if (config.encryptionSecret.length < 32) {
-  console.error('[config] ENCRYPTION_KEY must be at least 32 characters long.');
-  process.exit(1);
-}

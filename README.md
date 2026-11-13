@@ -1,224 +1,311 @@
-# LeadGuard: Unified Business Management Platform
+# LeadGuard: Enterprise Multi-Tenant CRM Platform
 
-LeadGuard is a multi-tenant CRM. It guarantees that **every incoming lead has exactly one accountable owner**, escalates the lead automatically when that owner ignores it, and keeps every action traceable. It connects to real services:
-
-- **WhatsApp** for messaging — via **Meta WhatsApp Cloud API** or **Twilio** (WhatsApp/SMS)
-- **Stripe (test mode)** for payments
-- **Google Calendar (OAuth 2.0)** for appointments
-- **Telegram** for escalation alerts
-
-Built for the NASCON 2026 Web Development competition.
-
-| What the judges asked for | Where to see it |
-|---|---|
-| Sign-up creates a workspace and its Owner; three levels; configurable permissions; masked values; server-side checks; workspace isolation (F1) | Sign-up, **Team**, **Roles & permissions** |
-| Contacts, companies, opportunities; custom fields; per-pipeline fields; required fields per stage; editable pipeline; filters and saved lists; activity timeline; complete customer view (F2) | **Contacts**, **Opportunities**, **Pipelines & fields** |
-| Intake from web form, WhatsApp and manual entry; availability; round-robin with a limit; acknowledgement countdown; escalation chain; absence handling; recovery queue; no double escalation; Telegram alerts (F3) | **Leads**, **Recovery queue**, **Assignment rules** |
-| Tamper-proof audit history (F4) | **Audit log** |
-| Live dashboard with drill-down, role-aware, customizable (F5) | **Dashboard** |
-| Integrations page, sync history, retries, encrypted per-workspace secrets (I1–I5) | **Integrations** |
-
-`docs/MASTER_PROMPT.md` is the full specification. Give it to any AI assistant to rebuild or extend the app. `docs/DEMO.md` is a 5-minute demo script.
+> **Course:** SE 4525 — Software Engineering  
+> **Approved Project Topic:** LeadGuard (CRM with Guaranteed Lead Ownership & Autonomous SLA Escalation)  
+> **Project Team Members:**
+> - **Musa** — Backend Lead, Database Architect & Cloud Integrations Specialist
+> - **Emaan** — Frontend Lead, UI/UX Designer & Client-State Architect
+> - **Aqsa H.** — QA Lead, Security Analyst & Project Manager / Scrum Master  
 
 ---
 
-## 1. How it is built
-
-```
-Browser (React + Vite)  ──HTTPS──▶  Express server (Render)  ──▶  PostgreSQL (Neon)
-                                     ├─ REST API  /api/*          (auth, CRM, leads, dashboard, audit)
-                                     ├─ Webhooks  /webhooks/*     (Twilio, Stripe — signature-verified)
-                                     ├─ OAuth     /oauth/google/callback
-                                     ├─ Live updates  /api/events (Server-Sent Events)
-                                     └─ Worker (every 2 s): escalations, Telegram alerts, message retries
-                                          ├──▶ Twilio      ├──▶ Stripe
-                                          ├──▶ Google Calendar  └──▶ Telegram
-```
-
-- **One server, one URL.** The same Express app serves the API and the React app, so there are no CORS or cookie problems.
-- **Timers live in the database.** Each lead has an `ack_deadline` column, and the worker checks it every few seconds. If the server restarts, nothing is lost.
-- **No double escalation.** Due leads are claimed with `SELECT … FOR UPDATE SKIP LOCKED`, one transaction per lead, so it is safe even with several servers.
-
-```
-server/src/
-  routes/        HTTP endpoints (auth, team, crm, opportunities, config, leads, engage, integrations, webhooks, public)
-  services/      business rules (leads engine, metrics, messaging, payments, calendar, permissions, audit, worker)
-  integrations/  provider clients (twilio, stripe, google, telegram) + encrypted credential store
-  db/            schema.sql (auto-applied on start), seed.js, pool.js
-  middleware/    sessions, permissions, CSRF
-client/src/      React pages, components, styles
-docs/            MASTER_PROMPT.md, DEMO.md
-```
+## 📌 Table of Contents
+- [1. Executive Overview & Problem Statement](#1-executive-overview--problem-statement)
+- [2. SE 4525 Course Deliverables (Tasks 1, 2, & 3)](#2-se-4525-course-deliverables-tasks-1-2--3)
+- [3. Quick Start & Launch Guide (Windows, macOS, Linux)](#3-quick-start--launch-guide-windows-macos-linux)
+  - [Method A: One-Click Launch Scripts (Recommended)](#method-a-one-click-launch-scripts-recommended)
+  - [Method B: Docker Compose (Local Database)](#method-b-docker-compose-local-database)
+  - [Method C: Manual Setup](#method-c-manual-setup)
+- [4. Demo Accounts & 5-Minute Evaluation Walkthrough](#4-demo-accounts--5-minute-evaluation-walkthrough)
+- [5. System Architecture & Tech Stack](#5-system-architecture--tech-stack)
+- [6. Core Capabilities & Architectural Guarantees](#6-core-capabilities--architectural-guarantees)
+- [7. External Cloud Integrations](#7-external-cloud-integrations)
+- [8. Automated Testing & Verification](#8-automated-testing--verification)
+- [9. Production Cloud Deployment (Render + Neon)](#9-production-cloud-deployment-render--neon)
+- [10. Troubleshooting & FAQ](#10-troubleshooting--faq)
 
 ---
 
-## 2. Run it on your computer (Windows)
+## 1. Executive Overview & Problem Statement
 
-You need **Node.js 20 or newer** (`node -v` should print v20 or higher) and a free **Neon** database.
+In small-to-medium service enterprises (solar contractors, medical clinics, real estate brokerages), **up to 30% of high-intent sales inquiries are lost or abandoned** because no single representative takes ownership, or inquiries sit unacknowledged in an inbox.
 
-1. **Install the libraries.** In VS Code, open **Terminal → New Terminal**, then run:
-   ```powershell
-   cd nascon-2026-leadguard
+**LeadGuard** solves this through architectural guarantees:
+- **Zero Orphaned Leads:** Every incoming inquiry (web form, WhatsApp, API) is immediately assigned to exactly one accountable owner via capacity-aware round-robin routing.
+- **Autonomous SLA Escalation:** An asynchronous background worker enforces strict countdown deadlines (`ack_deadline`). If an owner fails to acknowledge an assigned lead within the SLA window, the system atomically reassigns the lead up the management chain and triggers an urgent Telegram alert.
+- **Zero Double-Escalations:** Concurrency protection powered by PostgreSQL's `SELECT ... FOR UPDATE SKIP LOCKED` guarantees that parallel worker daemons or server clusters never double-escalate the same lead.
+- **Tamper-Proof Audit History:** Critical actions (`lead.escalated`, `payment.received`, `role.changed`) are recorded in an append-only ledger protected by database trigger functions that abort any SQL `UPDATE` or `DELETE`.
+- **Real-Time Responsiveness:** Server-Sent Events (SSE) push live notifications and countdown updates to active browser sessions without requiring page refreshes.
+
+---
+
+## 2. SE 4525 Course Deliverables (Tasks 1, 2, & 3)
+
+| Task ID | Description | Status | Deliverable Document Link |
+|---|---|---|---|
+| **SE Task 1** | Project Selection & Scope Inception | **Completed** | Chose **LeadGuard (Multi-Tenant CRM)** |
+| **SE Task 2** | Software Process Model Selection & Software Design | **Completed** | [📄 SE Task 2 Software Design Report](docs/SE_Task_2_Software_Design_Report.md) |
+| **SE Task 3** | Project Scope, WBS, Scheduling, Size/Cost & Risk Plan | **Completed** | [📄 SE Task 3 Project Management Report](docs/SE_Task_3_Project_Management_Report.md) |
+
+### Summary of SE Task 2 Components:
+- **Process Model Selection:** Agile / Scrum framework selected and justified against Waterfall, Spiral, and Prototyping models. Complete mapping of 4 two-week sprint roadmaps.
+- **Software Design:**
+  - Multi-tier system architecture and component interaction diagram.
+  - System actor identification (Owner, Manager, Sales, Junior, External Customer, System Daemon, External Webhooks) and complete Use Case specifications.
+  - Relational Entity-Relationship Diagram (ERD) with 18 PostgreSQL tables, indexing strategies, and database trigger functions.
+  - Visual wireframes for Executive Dashboard, Opportunity Kanban Board with stage gates, Lead SLA countdown timers, and Team RBAC matrix.
+  - Module responsibilities breakdown.
+
+### Summary of SE Task 3 Components:
+- **Scope & WBS:** Detailed 8-category hierarchical Work Breakdown Structure (WBS) down to 3 levels.
+- **Scheduling:** 8-week activity dependency matrix, Mermaid Gantt chart, and explicit assignment of responsibilities to team members (**Musa**, **Emaan**, **Aqsa H.**).
+- **Size & Cost Estimation:**
+  - Function Point Analysis: **264.45 Adjusted Function Points (AFP)**.
+  - COCOMO II estimation: **14.0 KSLOC** / **51.8 Person-Months** commercial baseline.
+  - Itemized resource budget: Human labor, hardware, and cloud hosting totaling **$17,544.40**.
+- **Risk Management:** Assessment of 6 critical technical, operational, and integration risks with probability-impact matrix, severity rankings, and mitigation/contingency protocols.
+
+---
+
+## 3. Quick Start & Launch Guide (Windows, macOS, Linux)
+
+LeadGuard is engineered to run on **Windows (cmd / PowerShell)**, **macOS**, and **Linux** with **zero setup required**.
+
+### Prerequisites:
+- **Node.js 20 or newer** (`node -v` should output `v20.x` or higher). Download from [nodejs.org](https://nodejs.org/).
+- **Zero Database Installations Required:** LeadGuard now includes an **Embedded Local Database (PGlite)** built right in! You do **NOT** need to install PostgreSQL, configure Docker, or create any cloud accounts. It stores data locally in `./data/leadguard-db` automatically.
+*(Optional: If you ever want to connect to a cloud Neon or Docker PostgreSQL database, you can simply set `DATABASE_URL` in `.env`).*
+
+---
+
+### Method A: One-Click Launch Scripts (Easiest for Presentations)
+
+#### On Windows:
+Double-click `start.bat` (or open Command Prompt / PowerShell and type `start.bat`):
+```cmd
+start.bat
+```
+
+#### On macOS / Linux:
+Open Terminal in the project folder and run:
+```bash
+./start.sh
+```
+
+#### Cross-Platform via npm:
+```bash
+npm start
+```
+*(or `npm run launch`)*
+
+> **What the launcher automatically does:**
+> 1. Verifies Node.js runtime ($\ge 20$).
+> 2. Auto-creates `.env` with a zero-config embedded database and secure encryption keys.
+> 3. Boots the embedded database, synchronizes the full PostgreSQL schema, and auto-seeds the **Sunrise Solar (Demo)** workspace.
+> 4. Launches the server and **automatically opens your browser** directly to **`http://localhost:3000`**!
+
+---
+
+### Method B: Docker Compose (Local Database)
+
+If you have Docker Desktop installed, you can spin up a local PostgreSQL container in seconds:
+```bash
+# 1. Start PostgreSQL 16 container in background
+docker compose up -d
+
+# 2. Run the application
+npm run launch
+```
+*(The launcher will automatically detect and connect to the local container).*
+
+---
+
+### Method C: Manual Setup
+
+1. **Install dependencies:**
+   ```bash
    npm install
    ```
-   If you see *"running scripts is disabled on this system"*, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, answer `Y`, and run `npm install` again.
 
-2. **Create your `.env` file:**
-   ```powershell
-   Copy-Item .env.example .env
+2. **Configure environment:**
+   ```bash
+   # Copy example environment
+   cp .env.example .env
    ```
-   Open `.env` and fill in two values:
-   - `DATABASE_URL`: go to https://console.neon.tech, open your project, click **Connect**, and copy the connection string. If it ends with `&channel_binding=require`, delete that part.
-   - `ENCRYPTION_KEY`: generate one with the command below, then paste the output:
-     ```powershell
+   Open `.env` in any text editor:
+   - Paste your Neon connection string into `DATABASE_URL`:
+     ```env
+     DATABASE_URL=postgresql://USER:PASSWORD@ep-xyz.neon.tech/neondb?sslmode=require
+     ```
+   - Generate and paste a 32-byte encryption key:
+     ```bash
      node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
      ```
-   **Keep this key forever.** Integration secrets are encrypted with it. If you change it, you have to reconnect your integrations.
 
-3. **Start the app:**
-   ```powershell
-   npm run dev
-   ```
-   When it works, you see `LeadGuard running at http://localhost:3000`. The database tables are created automatically.
-
-4. **Add demo data (optional, recommended).** Open a second terminal and run:
-   ```powershell
+3. **Synchronize database & seed demo data:**
+   ```bash
    npm run seed
    ```
-   This creates **Sunrise Solar (Demo)**. Log in as `owner@sunrise.demo`, password `Demo@12345`. The other accounts are `manager@`, `ayesha@`, `bilal@`, `omar@` (cannot see values), `backup@` and `admin@sunrise.demo`, all with the same password.
 
-5. **Run the self-test (optional).** With `npm run dev` still running:
-   ```powershell
-   npm test
+4. **Start the development server:**
+   ```bash
+   npm run dev
    ```
-   It runs 99 end-to-end checks in two parts and should end with `75 passed, 0 failed` and then `24 passed, 0 failed`. It creates throw-away test workspaces in whichever database `.env` points to, so run it against a test database, not the one you demo from.
-
-> Webhooks (Twilio and Stripe) need a public HTTPS address, which your laptop does not have. Test those on the deployed Render URL (section 3). If you really want to test them locally, use a tunnel such as `cloudflared tunnel --url http://localhost:3000` and set `APP_URL` in `.env` to the tunnel URL.
+   Open your browser to: **`http://localhost:3000`**
 
 ---
 
-## 3. Deploy for free (Render + Neon)
+## 4. Demo Accounts & 5-Minute Evaluation Walkthrough
 
-Do these in order:
+The seed command creates the **Sunrise Solar (Demo)** workspace populated with realistic sales pipelines, ~300 contacts, active opportunities, and team members.
 
-1. **Push to GitHub** (your `.env` is ignored and never uploaded):
-   ```powershell
-   git add .
-   git commit -m "LeadGuard"
-   git push
-   ```
-2. **Create the web service.** On https://dashboard.render.com, click **New → Web Service**, connect GitHub, and pick `nascon-2026-leadguard`. Use these settings:
+### Evaluation Credentials:
+All demo accounts share the password: **`Demo@12345`**
 
-   | Setting | Value |
-   |---|---|
-   | Runtime | Node |
-   | Region | the one closest to you, e.g. Singapore |
-   | Build Command | `npm install && npm run build` |
-   | Start Command | `npm start` |
-   | Instance Type | Free |
-   | Health Check Path (Advanced) | `/api/health` |
+| Role / User | Email | Access Scope & Evaluation Focus |
+|---|---|---|
+| **Workspace Owner** | `owner@sunrise.demo` | Full administrative control, billing, role editing, integration keys. |
+| **Sales Manager** | `manager@sunrise.demo` | Reassignment privileges, pipeline oversight, recovery queue. |
+| **Sales Agent** | `ayesha@sunrise.demo` | Normal CRM access, WhatsApp inbox, lead acknowledgment. |
+| **Junior Agent** | `omar@sunrise.demo` | **Restricted / Masked permissions:** Deal values, financial KPIs, and phone numbers are hidden as `[Hidden]`. Audit logs return HTTP 403. |
+| **Admin** | `admin@sunrise.demo` | System administration & user invite management. |
 
-3. **Set environment variables** under **Environment**:
-   - `DATABASE_URL`: the same Neon connection string you use locally
-   - `ENCRYPTION_KEY`: **the same** key you use locally
-   - `NODE_VERSION`: `22` (optional)
-
-   You do **not** need `APP_URL`, because Render provides `RENDER_EXTERNAL_URL` automatically.
-4. **Deploy.** Click **Create Web Service** and wait for "Live". Then open `https://<your-app>.onrender.com/api/health`. You should see `{"ok":true,...}`.
-5. **Connect the integrations** on the live site's **Integrations** page (section 4). Use the URLs that page shows: they already contain your Render address and your workspace's secret token.
-
-**Free-tier facts (check them on the providers' pricing pages; they change over time):**
-
-- Render free web services **go to sleep after about 15 minutes without traffic**. The first request afterwards takes up to about a minute. While the service sleeps, the escalation timer is paused. When it wakes, the worker immediately processes everything that became due, because deadlines are stored in the database.
-- **Before a demo, open the site a few minutes early** so the service is awake.
-- Neon's free plan needs no card. Its database pauses when idle and wakes in about a second.
+### 5-Minute Evaluation Script:
+1. **Lead SLA Countdown & Escalation:**
+   - Log in as `ayesha@sunrise.demo`.
+   - In a separate incognito window, open the public form at `http://localhost:3000/api/public/form/<token>` and submit a test inquiry.
+   - Observe the live countdown timer on Ayesha's lead view without refreshing the page.
+   - If not acknowledged within the window (set to 30s in demo settings), observe the lead autonomously escalate to the manager, accompanied by an audit log entry.
+2. **Interactive Kanban Stage Gates:**
+   - Open **Opportunities**. Drag a card to the **Design & Quote** stage.
+   - Notice the movement is blocked until the mandatory field (*"Roof Size"* or custom requirement) is filled.
+3. **Data Masking & RBAC:**
+   - Log in as `omar@sunrise.demo`.
+   - Verify that financial metrics and contact details appear masked as `[Hidden]`.
+   - Attempt to navigate directly to `/api/audit` — observe the strict **HTTP 403 Forbidden** security response.
+4. **Tamper-Proof Audit Trail:**
+   - Log in as `owner@sunrise.demo` and navigate to **Audit Log**.
+   - Review immutable records with actor attribution, timestamp, and JSON diffs (`before_val` and `after_val`).
 
 ---
 
-## 4. Connect the real services
+## 5. System Architecture & Tech Stack
 
-Each workspace enters **its own** credentials on the **Integrations** page (Owner/Admin, or anyone with the "Manage integrations" permission). When you save, the app tests the credentials first and saves nothing if the test fails. Secrets are encrypted, never shown again in full, and never sent to the browser. Each card on the page also has a "How to set it up" section.
+```
+Browser Client (React 18 + Vite 5)
+       │  (HTTPS / SSE: /api/events)
+       ▼
+Express.js Server (Port 3000)
+ ├── Security: Helmet CSP, CSRF Guard, Scrypt Auth, Rate Limiter
+ ├── REST API: /api/auth, /api/crm, /api/leads, /api/opportunities
+ ├── Webhooks: /webhooks/twilio, /webhooks/stripe (HMAC Signature Verified)
+ ├── OAuth 2.0: /oauth/google/callback
+ └── Autonomous Background Worker (Every 2000ms):
+       ├── SLA Deadline Detection (SELECT ... FOR UPDATE SKIP LOCKED)
+       ├── Automatic Reassignment & Escalation Engine
+       └── Multi-Channel Alert Dispatcher (Telegram / Twilio)
+       │
+       ▼
+PostgreSQL Database (Neon / Local)
+ ├── Multi-tenant Row-Level Isolation (workspace_id on all tables)
+ ├── AES-256-GCM Encrypted Credentials Vault
+ └── PostgreSQL Engine Immutability Triggers (prevent_audit_tampering)
+```
 
-> Menu names on provider websites change from time to time. If a button is named slightly differently, look for the closest match.
-
-### Twilio WhatsApp Sandbox (messaging)
-1. Create a free account at https://www.twilio.com/try-twilio.
-2. On the Console home page, under **Account Info**, copy the **Account SID** (starts with `AC`) and the **Auth Token**.
-3. Go to **Messaging → Try it out → Send a WhatsApp message**. Note the sandbox number (usually `+1 415 523 8886`) and the **join phrase**.
-4. From your phone, send the join phrase on WhatsApp to the sandbox number. Every customer phone used in the demo must do this once.
-5. In LeadGuard's **Integrations → Messaging → Connect**, enter the SID, the token, sender `+14155238886` and channel WhatsApp, then save.
-6. Copy the **Incoming message webhook** URL from LeadGuard. In Twilio's **Sandbox settings**, paste it into **"When a message comes in"**, choose **POST**, and save.
-7. **Test it:** send a WhatsApp message from a new phone to the sandbox number. A contact and a lead appear in LeadGuard within seconds.
-
-### WhatsApp via Meta Cloud API (alternative to Twilio)
-LeadGuard supports both providers. When **Meta WhatsApp** is connected it is used for messaging; otherwise Twilio is used.
-> Note: the problem statement (I1) names *Twilio WhatsApp Sandbox* (Twilio SMS accepted). Confirm with the organizers that Meta's Cloud API is acceptable, or keep Twilio connected as well.
-1. https://developers.facebook.com → **My Apps → Create app** → use case/type **Business** (or "Other → Business") → add the **WhatsApp** product. Meta gives you a free **test phone number**.
-2. **WhatsApp → API Setup**: copy the **Phone number ID** (a long number), click **Generate access token** and copy it. Under **To → Manage phone number list**, add your own phone and confirm the code (max 5 test recipients).
-3. **App settings → Basic**: click **Show** next to **App secret** and copy it.
-4. LeadGuard **Integrations → Messaging — WhatsApp (Meta Cloud API) → Connect**: paste Phone number ID, Access token, App Secret → **Test & save**.
-5. Meta **WhatsApp → Configuration → Webhook → Edit**: paste LeadGuard's **Callback URL** and **Verify token** (both shown on the Meta card) → **Verify and save**. Then under **Webhook fields**, **Subscribe** to `messages`.
-6. Test: from your phone send a WhatsApp message to the Meta test number → a contact + lead appear. Reply from **Inbox** (free-form replies only work within 24 h of the customer's last message).
-7. The temporary access token expires after ~24 h. Paste a new one before your demo (or create a permanent System User token in Business Settings).
-
-### Stripe (test mode payments)
-1. Sign up at https://dashboard.stripe.com/register. No business verification is needed for test mode. Make sure **Test mode** is on.
-2. Go to **Developers → API keys** and copy the **Secret key** (`sk_test_…`). In LeadGuard's **Integrations → Payments → Connect**, paste it and save.
-3. Go to **Developers → Webhooks** (sometimes shown as **Event destinations**) and choose **Add endpoint**. Paste LeadGuard's **Webhook endpoint URL** and select these events: `checkout.session.completed`, `checkout.session.expired`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `payment_intent.payment_failed`, `charge.refunded`.
-4. Open the endpoint, reveal the **Signing secret** (`whsec_…`), paste it into LeadGuard, and save again.
-5. **Test it:** open an opportunity, choose **Request payment**, then **Open checkout**. Pay with card `4242 4242 4242 4242`, any future date and any CVC. The status turns **Paid** on its own. To test a refund, refund the payment in the Stripe Dashboard: it becomes **Refunded** in LeadGuard.
-
-### Google Calendar (OAuth 2.0)
-1. Go to https://console.cloud.google.com, create a project, then open **APIs & Services → Library**, search "Google Calendar API", and click **Enable**.
-2. Configure the **OAuth consent screen** (also called **Google Auth Platform**): user type **External**, status **Testing**. Under **Test users**, add every Gmail address that will connect a calendar.
-3. Go to **Credentials** (or **Clients**) → **Create credentials → OAuth client ID**, type **Web application**:
-   - **Authorized redirect URI:** copy it from LeadGuard's Integrations page, e.g. `https://<your-app>.onrender.com/oauth/google/callback`. Add `http://localhost:3000/oauth/google/callback` as well if you test locally.
-4. Copy the **Client ID** and **Client secret** into LeadGuard's **Integrations → Calendar**.
-5. Each employee goes to **Profile → Connect Google Calendar** and accepts the consent screen.
-6. While the app is in "Testing", Google can expire refresh tokens after 7 days. LeadGuard detects this and shows **Needs reconnection**.
-
-### Telegram (escalation alerts)
-1. In Telegram, open **@BotFather**, send `/newbot`, and choose a name and a username ending in `bot`. Copy the **token**.
-2. Paste the token into LeadGuard's **Integrations → Notifications** and save.
-3. Each employee goes to **Profile → Link Telegram**, opens the bot link, presses **Start**, then clicks **I pressed Start**. **Send test alert** confirms that it works.
-
----
-
-## 5. Security in short
-
-- Passwords are hashed with salted **scrypt**.
-- Sessions are httpOnly cookies that expire (12 h idle, 7 days maximum), and you can end them everywhere.
-- After 5 wrong passwords, an account is locked for 5 minutes. Logins are also rate-limited per IP address.
-- Every endpoint checks the workspace and the permission **on the server**. IDs from another workspace return "not found".
-- Input is validated with zod. All SQL is parameterized. React escapes all output. Requests carry a CSRF header and an Origin check.
-- Webhooks are signature-verified (Twilio HMAC-SHA1, Stripe HMAC-SHA256 with a replay window). Forged requests are rejected and logged.
-- Integration secrets are AES-256-GCM encrypted per workspace and masked in the UI.
-- The audit log and the integration history are append-only, enforced by a database trigger.
-
----
-
-## 6. Troubleshooting
-
-| Problem | What to do |
+| Layer | Technology Choice & Rationale |
 |---|---|
-| `Missing environment variable DATABASE_URL` | Your `.env` is missing or in the wrong folder. It must sit next to `package.json`. |
-| `password authentication failed` / `ENOTFOUND` | Copy the Neon connection string again, and remove `&channel_binding=require` from the end. |
-| `EADDRINUSE :3000` | Another program uses port 3000. Set `PORT=3001` in `.env`. |
-| Meta: "The callback URL or verify token couldn't be validated" | The Render site must be awake and the Verify token copied exactly from LeadGuard's Meta card. |
-| Meta: replies fail with error 131030 / 131047 / 190 | 131030: add the number to the test recipient list. 131047: customer must message you first (24-hour window). 190: access token expired, paste a new one. |
-| Twilio messages never arrive | The phone must have joined the sandbox. The webhook URL must be the Render URL, with POST. Check **Integrations → Synchronization history** for `rejected` rows. |
-| "Invalid X-Twilio-Signature" in history | The URL in Twilio must match exactly what LeadGuard shows (https, no extra slash). |
-| Stripe status does not change | Check that the webhook endpoint uses the correct URL, has the events listed above, and that its **signing secret** is saved. Stripe → Webhooks → your endpoint shows the delivery attempts. |
-| Google: "redirect_uri_mismatch" | The redirect URI in Google Cloud must match LeadGuard's exactly. |
-| Google: "access blocked / app not verified" | Add that Gmail address as a **Test user** on the consent screen. |
-| "Stored credentials cannot be decrypted" | `ENCRYPTION_KEY` changed. Use the original key, or reconnect the integration. |
-| Render site is slow on the first request | The free service was asleep. Wait about 30–60 seconds. |
+| **Frontend SPA** | React 18, Vite 5, React Router 6, Custom CSS Tokens (Zero bulky third-party UI kits, fast 390px mobile responsiveness). |
+| **Server & API** | Node.js 20+, Express 4 (ES Modules), Zod schema validation, Helmet security headers. |
+| **Database** | PostgreSQL 14+ (`pg` client with pure SQL parameterization, advisory locks, and transaction rollbacks). |
+| **Real-Time Push** | Server-Sent Events (SSE) over persistent HTTP connection. |
+| **Background Daemon** | Autonomous Node.js loop with atomic row locking (`FOR UPDATE SKIP LOCKED`). |
+| **Cryptography** | Node.js native `crypto.scrypt` (salted password hashing) and `aes-256-gcm` (credential encryption). |
 
 ---
 
-## 7. Honest limitations
+## 6. Core Capabilities & Architectural Guarantees
 
-- Media messages (images, voice notes) are stored as "[media message — not displayed]".
-- Only the employee's **primary** Google calendar is used.
-- No email service is included, so invitations are shared as a copyable link.
-- The worker runs inside the web process. On Render's free plan it pauses while the service sleeps, then catches up when it wakes.
+1. **Guaranteed Lead Ownership:**
+   A lead can never enter an unassigned or orphaned state. The round-robin algorithm prioritizes available agents, checking capacity limits (`max_open_leads`). If all agents are busy or offline, assignment seamlessly falls back to backup staff $\rightarrow$ manager $\rightarrow$ workspace owner.
+2. **Atomic SLA Concurrency:**
+   Worker escalations use explicit database transactions with row-level locks. If multiple worker processes check deadlines at the same time, `SKIP LOCKED` ensures each lead is processed exactly once with zero race conditions.
+3. **Database-Enforced Immutability:**
+   Audit logs cannot be tampered with—even by database administrators running raw SQL. An active database trigger intercepts any `UPDATE` or `DELETE` statement on `audit_logs` and aborts the query.
+4. **Client-Side Zero-Latency Experience:**
+   The client subscribes to `/api/events`. When a backend event commits, an SSE invalidation packet triggers selective component re-fetching, providing real-time reactivity without heavy WebSocket overhead.
+
+---
+
+## 7. External Cloud Integrations
+
+Integration credentials are entered on the **Integrations** page per workspace, tested before saving, and stored encrypted with **AES-256-GCM**:
+
+- **Twilio WhatsApp / SMS:** Two-way messaging sandbox. Inbound messages create contacts and leads; outbound replies are dispatched directly from the CRM inbox.
+- **Meta WhatsApp Cloud API:** First-class alternative to Twilio for native Meta WhatsApp Business messaging.
+- **Stripe Payments:** Generates hosted Stripe Checkout links directly from sales opportunities. Webhooks cryptographically verify `checkout.session.completed` and automatically mark deals as **Paid**.
+- **Google Calendar (OAuth 2.0):** Books customer appointments directly into the representative's Google Calendar with real-time busy slot detection.
+- **Telegram Bot API:** Instant push notifications delivered to representatives' Telegram accounts when an SLA warning occurs or an urgent lead is escalated.
+
+---
+
+## 8. Automated Testing & Verification
+
+LeadGuard includes a comprehensive automated test suite consisting of **99 end-to-end integration and smoke tests**:
+
+```bash
+# Execute the full automated test suite
+npm test
+```
+
+### What the test suite validates:
+- **Part 1 (Smoke Tests - 75 checks):**
+  - Tenant onboarding and workspace boundary isolation.
+  - Role-Based Access Control and financial value masking.
+  - Inbound webhook HMAC signature validation and replay defense.
+  - Dynamic pipeline stage gate validation.
+  - Database trigger immutability checks on `audit_logs`.
+- **Part 2 (Acceptance & Concurrency Tests - 24 checks):**
+  - 4 concurrent workers attempting to escalate the same overdue lead simultaneously.
+  - Verification that the lead is escalated **exactly once**.
+  - Telegram alert queue dispatching.
+  - Session expiration and CSRF protection headers.
+
+---
+
+## 9. Production Cloud Deployment (Render + Neon)
+
+LeadGuard is optimized for free deployment on **Render** (Web Service) and **Neon** (Serverless PostgreSQL):
+
+1. **Database:** Create a free project at [console.neon.tech](https://console.neon.tech) and copy your connection string.
+2. **Web Service on Render:**
+   - Connect your GitHub repository to [Render](https://dashboard.render.com).
+   - Choose **Node** runtime.
+   - **Build Command:** `npm install && npm run build`
+   - **Start Command:** `npm start`
+   - **Health Check Path:** `/api/health`
+3. **Environment Variables:**
+   - `DATABASE_URL`: Your Neon connection string.
+   - `ENCRYPTION_KEY`: A 64-character random hex string (`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`).
+4. Render automatically assigns `RENDER_EXTERNAL_URL` which configures `APP_URL` for webhooks and OAuth redirects.
+
+---
+
+## 10. Troubleshooting & FAQ
+
+| Problem | Root Cause | Solution |
+|---|---|---|
+| `Node.js version must be 20+` | Outdated Node.js runtime. | Upgrade Node.js from [nodejs.org](https://nodejs.org/). |
+| `Missing environment variable DATABASE_URL` | `.env` missing or unpopulated. | Run `./start.sh` or `start.bat`; the launcher creates `.env` and guides setup. |
+| `password authentication failed` | Incorrect Neon/Postgres password. | Re-copy connection string from Neon; ensure `&channel_binding=require` is removed if present. |
+| `EADDRINUSE :3000` | Port 3000 is occupied by another process. | Change `PORT=3001` in your `.env` file. |
+| `Stored credentials cannot be decrypted` | `ENCRYPTION_KEY` was altered. | Restore the original `ENCRYPTION_KEY` in `.env` or re-save integration credentials. |
+
+---
+
+## 👥 SE 4525 Project Team Sign-Off
+
+This project and associated documentation represent original software engineering work conducted for **SE 4525**:
+
+- **Musa** — Backend Lead & Integrations Architect  
+- **Emaan** — Frontend Lead & UI/UX Designer  
+- **Aqsa H.** — QA Lead, Security Analyst & Scrum Master  

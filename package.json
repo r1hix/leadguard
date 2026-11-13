@@ -4,16 +4,21 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
+    "launch": "node scripts/launch.mjs",
     "dev": "node --watch-path=server/src server/src/index.js",
     "build": "vite build",
-    "start": "node server/src/index.js",
+    "start": "node scripts/launch.mjs",
+    "start:raw": "node server/src/index.js",
     "seed": "node server/src/db/seed.js",
     "migrate": "node server/src/db/migrate.js",
     "test": "node server/test/smoke.js && node server/test/acceptance.js"
   },
   "dependencies": {
+    "@electric-sql/pglite": "^0.5.16",
     "@vitejs/plugin-react": "^4.3.4",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
